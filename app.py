@@ -16,13 +16,14 @@ client = OpenAI(api_key=api_key)
 
 app = FastAPI()
 
+origins = [
+    "http://localhost:3000",
+    "https://aida-data.vercel.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    #  allow_origins=[
-    #     "http://localhost:3000",  # Development
-    #     "https://aida-data.vercel.app",  # Production
-    # ],
-    allow_origins=['*'],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
