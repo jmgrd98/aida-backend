@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import re
+import logging
 
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
@@ -17,14 +18,17 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-     allow_origins=[
-        "http://localhost:3000",  # Development
-        "https://aida-data.vercel.app",  # Production
-    ],
+    #  allow_origins=[
+    #     "http://localhost:3000",  # Development
+    #     "https://aida-data.vercel.app",  # Production
+    # ],
+    allow_origins=['*'],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logging.info(f"CORS origins allowed: {origins}")
 
 class CommandRequest(BaseModel):
     csv_data: str
