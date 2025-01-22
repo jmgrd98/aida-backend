@@ -19,6 +19,7 @@ app = FastAPI()
 origins = [
     "http://localhost:3000",
     "https://aida-data.vercel.app",
+    "https://ezydata.vercel.app"
 ]
 
 app.add_middleware(
@@ -38,14 +39,11 @@ class CommandRequest(BaseModel):
 @app.post("/process-command/")
 async def process_command(request: CommandRequest):
     try:
-        # Load the CSV data into a DataFrame
         df = pd.read_csv(StringIO(request.csv_data))
 
-        # Extract column names
         column_names = df.columns.tolist()
         column_names_str = ", ".join(column_names)
         print('COLUMN NAMES', column_names_str)
-        # Create the dynamic system message with the column names
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -67,7 +65,6 @@ async def process_command(request: CommandRequest):
         else:
             raise HTTPException(status_code=400, detail="No valid Python command found in the generated response.")
         print('GENERATED COMMAND', python_command)
-        # Execute the generated command safely
         try:
             compile(python_command, '<string>', 'exec')
         except SyntaxError as e:
