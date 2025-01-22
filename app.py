@@ -35,36 +35,6 @@ class CommandRequest(BaseModel):
     csv_data: str
     instruction: str
 
-
-from openai import OpenAI
-from dotenv import load_dotenv
-import os
-import pandas as pd
-from io import StringIO
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-
-load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-
-client = OpenAI(api_key=api_key)
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-class CommandRequest(BaseModel):
-    csv_data: str
-    instruction: str
-
-
 @app.post("/process-command/")
 async def process_command(request: CommandRequest):
     try:
