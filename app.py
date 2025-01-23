@@ -59,11 +59,9 @@ async def process_command(request: CommandRequest):
                 {"role": "user", "content": f"Analyze this dataset and generate either a pandas command or a graph based on the following instruction. Give me only the code and nothing else. {request.instruction}"}
             ],
         )
-        
-        # Extract the generated command
+
         generated_response = completion.choices[0].message.content.strip()
         
-        # Check if the response contains graph instructions
         if "matplotlib" in generated_response or "seaborn" in generated_response:
             match = re.search(r"```python\n(.*?)```", generated_response, re.S)
             if match:
@@ -71,11 +69,9 @@ async def process_command(request: CommandRequest):
             else:
                 raise HTTPException(status_code=400, detail="No valid Python graph command found.")
             
-            # Execute the graph command
             local_vars = {"df": df, "plt": plt, "sns": sns}
             exec(graph_command, {}, local_vars)
             
-            # Save the plot to a temporary file
             with NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
                 plt.savefig(tmp_file.name, format="png")
                 plt.close()
@@ -85,14 +81,12 @@ async def process_command(request: CommandRequest):
             return {"type": "graph", "graph": graph_data}
 
         else:
-            # Handle table operations (Pandas commands)
             match = re.search(r"```python\n(.*?)```", generated_response, re.S)
             if match:
                 pandas_command = match.group(1).strip()
             else:
                 raise HTTPException(status_code=400, detail="No valid Python command found.")
             
-            # Execute the Pandas command
             local_vars = {"df": df}
             exec(f"result = {pandas_command}", {}, local_vars)
             
