@@ -47,54 +47,83 @@ class CommandRequest(BaseModel):
 async def process_command(request: CommandRequest):
     try:
         df = pd.read_csv(StringIO(request.csv_data))
+
         column_names = df.columns.tolist()
         column_names_str = ", ".join(column_names)
-        
-        system_message = f"You are a helpful assistant that converts instructions into pandas commands or generates graphs using matplotlib/seaborn. The column names in the dataset are: {column_names_str}."
-        
+        logging.info(f"Column names: {column_names_str}")
+
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"You are a helpful assistant that converts instructions into pandas commands. The column names in the dataset are: {column_names_str}."
+                },
+                {
+                    "role": "user",
+                    "content": f"Convert the following instruction into a pandas command. Give me only the code and nothing else.\n\nInstruction: {request.instruction}"
+                }
+            ],
+        )
+
+        generated_command = completion.choices[0].message.content.strip()
+        print('GENERATED COMMAND', generated_command)
+        match = re.search(r"```python\n(.*?)```", generated_command, re.S)
+
+        logging.info(f"Generated command: {generated_command}")
+
+        local_vars = {"df": df}
+        exec(f"result = {generated_command}", {}, local_vars)
+
+        result_df = local_vars.get("result")
+        if result_df is None or not isinstance(result_df, pd.DataFrame):
+            raise HTTPException(status_code=400, detail="Generated command did not produce a valid DataFrame.")
+
+        return {"type": "table", "data": result_df.to_json(orient="split")}
+
+    except Exception as e:
+        logging.error(f"Error processing command: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to execute command: {str(e)}")
+
+
+
+@app.post("/generate-chart/")
+async def generate_chart(request: CommandRequest):
+    try:
+        df = pd.read_csv(StringIO(request.csv_data))
+        column_names = df.columns.tolist()
+        column_names_str = ", ".join(column_names)
+
+        system_message = f"You are a helpful assistant that generates Python graph commands using matplotlib or seaborn. The column names in the dataset are: {column_names_str}."
+
+        completion = client.chat.completions.create(
+            model="gpt-4",
             messages=[
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": f"Analyze this dataset and generate either a pandas command or a graph based on the following instruction. Give me only the code and nothing else. {request.instruction}"}
+                {"role": "user", "content": f"Generate a Python graph command based on the following instruction. Give me only the code and nothing else.\n\nInstruction: {request.instruction}"}
             ],
         )
 
         generated_response = completion.choices[0].message.content.strip()
-        
-        if "matplotlib" in generated_response or "seaborn" in generated_response:
-            match = re.search(r"```python\n(.*?)```", generated_response, re.S)
-            if match:
-                graph_command = match.group(1).strip()
-            else:
-                raise HTTPException(status_code=400, detail="No valid Python graph command found.")
-            
-            local_vars = {"df": df, "plt": plt, "sns": sns}
-            exec(graph_command, {}, local_vars)
-            
-            with NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                plt.savefig(tmp_file.name, format="png")
-                plt.close()
-                tmp_file.seek(0)
-                graph_data = base64.b64encode(tmp_file.read()).decode("utf-8")
-            
-            return {"type": "graph", "graph": graph_data}
-
+        match = re.search(r"```python\n(.*?)```", generated_response, re.S)
+        if match:
+            graph_command = match.group(1).strip()
         else:
-            match = re.search(r"```python\n(.*?)```", generated_response, re.S)
-            if match:
-                pandas_command = match.group(1).strip()
-            else:
-                raise HTTPException(status_code=400, detail="No valid Python command found.")
-            
-            local_vars = {"df": df}
-            exec(f"result = {pandas_command}", {}, local_vars)
-            
-            result_df = local_vars.get("result")
-            if result_df is None or not isinstance(result_df, pd.DataFrame):
-                raise HTTPException(status_code=400, detail="Generated command did not produce a valid DataFrame.")
-            
-            return {"type": "table", "data": result_df.to_json(orient="split")}
+            raise HTTPException(status_code=400, detail="No valid Python graph command found.")
+
+        logging.info(f"Generated graph command: {graph_command}")
+
+        local_vars = {"df": df, "plt": plt, "sns": sns}
+        exec(graph_command, {}, local_vars)
+
+        with NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+            plt.savefig(tmp_file.name, format="png")
+            plt.close()
+            tmp_file.seek(0)
+            graph_data = base64.b64encode(tmp_file.read()).decode("utf-8")
+
+        return {"type": "graph", "graph": graph_data}
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to execute command: {str(e)}")
+        logging.error(f"Error generating chart: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to generate chart: {str(e)}")
