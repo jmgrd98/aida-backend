@@ -23,9 +23,9 @@ app = FastAPI()
 
 origins = [
     "http://localhost:3000",
+    "http://localhost:3000/dashboard"
     "http://localhost:5173",
     "http://localhost:3001",
-    "https://aida-data.vercel.app",
     "https://ezydata.vercel.app"
 ]
 
@@ -94,36 +94,38 @@ async def generate_chart(request: CommandRequest):
         column_names = df.columns.tolist()
         column_names_str = ", ".join(column_names)
 
-        system_message = f"You are a helpful assistant that generates Python graph commands using matplotlib or seaborn. The column names in the dataset are: {column_names_str}."
+        system_message = f"You are a helpful assistant that generates Python graph commands using matplotlib or seaborn. The column names are: {column_names_str}."
 
         completion = client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_message},
-                {"role": "user", "content": f"Generate a Python graph command based on the following instruction. Give me only the code and nothing else.\n\nInstruction: {request.instruction}"}
+                {"role": "user", "content": f"Generate Python graph code using matplotlib/seaborn. Only provide the code block.\nInstruction: {request.instruction}"}
             ],
         )
 
         generated_response = completion.choices[0].message.content.strip()
-        match = re.search(r"```python\n(.*?)```", generated_response, re.S)
-        if match:
-            graph_command = match.group(1).strip()
-        else:
-            raise HTTPException(status_code=400, detail="No valid Python graph command found.")
+        
+        code_block = re.search(r"```(?:python)?\n(.*?)```", generated_response, re.DOTALL)
+        if not code_block:
+            raise HTTPException(status_code=400, detail="No valid code block found in response")
+            
+        graph_command = code_block.group(1).strip()
 
-        logging.info(f"Generated graph command: {graph_command}")
+        if not any(x in graph_command for x in ['plt.show()', 'plt.savefig', 'sns.']):
+            raise HTTPException(status_code=400, detail="Generated code doesn't contain valid plotting commands")
 
         local_vars = {"df": df, "plt": plt, "sns": sns}
         exec(graph_command, {}, local_vars)
-
-        with NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-            plt.savefig(tmp_file.name, format="png")
-            plt.close()
+        
+        with NamedTemporaryFile(suffix=".png") as tmp_file:
+            plt.savefig(tmp_file.name, bbox_inches='tight')
+            plt.clf()
             tmp_file.seek(0)
             graph_data = base64.b64encode(tmp_file.read()).decode("utf-8")
 
         return {"type": "graph", "graph": graph_data}
 
     except Exception as e:
-        logging.error(f"Error generating chart: {e}")
-        raise HTTPException(status_code=400, detail=f"Failed to generate chart: {str(e)}")
+        logging.error(f"Chart error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Chart generation failed: {str(e)}")
