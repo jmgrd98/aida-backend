@@ -43,6 +43,10 @@ class CommandRequest(BaseModel):
     csv_data: str
     instruction: str
 
+@app.get('/')
+async def hello_world():
+    return "Hello, world!"
+
 @app.post("/process-command/")
 async def process_command(request: CommandRequest):
     try:
