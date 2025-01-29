@@ -14,13 +14,16 @@ import base64
 from typing import Optional
 from tempfile import NamedTemporaryFile
 import anthropic
+import google.generativeai as genai
 
 load_dotenv()
 open_api_key = os.getenv("OPENAI_API_KEY")
 claude_api_key = os.getenv("CLAUDE_API_KEY")
+gemini_api_key = os.getenv("GEMINI_API_KEY")
 
 openaiClient = OpenAI(api_key=open_api_key)
 claudeClient = anthropic.Anthropic(api_key=claude_api_key)
+genai.configure(api_key=gemini_api_key)
 
 app = FastAPI()
 
@@ -39,15 +42,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logging.info(f"CORS origins allowed: {origins}")
-
 class CommandRequest(BaseModel):
     csv_data: str
     instruction: str
     model: Optional[str] = "openai"
 
 def get_openai_response(prompt: str) -> str:
-    print('ENTROU OPENAI')
     try:
         response = openaiClient.chat.completions.create(
             model="gpt-4",
@@ -59,23 +59,26 @@ def get_openai_response(prompt: str) -> str:
         raise HTTPException(status_code=500, detail="OpenAI API request failed")
 
 def get_claude_response(prompt: str) -> str:
-    print('ENTROU CLAUDE')
     try:
         response = claudeClient.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=1024,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            messages=[{"role": "user", "content": prompt}]
         )
         return response.content[0].text.strip()
     except Exception as e:
         logging.error(f"Claude API error: {e}")
         raise HTTPException(status_code=500, detail="Claude API request failed")
 
-@app.get('/')
-async def hello_world():
-    return {"message": "Hello, world!"}
+def get_gemini_response(prompt: str) -> str:
+    print('ENTROU GEMINI')
+    try:
+        model = genai.GenerativeModel("gemini-pro")
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        logging.error(f"Gemini API error: {e}")
+        raise HTTPException(status_code=500, detail="Gemini API request failed")
 
 @app.post("/process-command/")
 async def process_command(request: CommandRequest):
@@ -87,17 +90,21 @@ async def process_command(request: CommandRequest):
                   f"The column names in the dataset are: {column_names_str}.\n\n"
                   f"Instruction: {request.instruction}")
 
-        generated_command = get_claude_response(prompt) if request.model == "claude" else get_openai_response(prompt)
-        match = re.search(r"```python\n(.*?)```", generated_command, re.S)
+        if request.model == "claude":
+            generated_command = get_claude_response(prompt)
+        elif request.model == "gemini":
+            generated_command = get_gemini_response(prompt)
+        else:
+            generated_command = get_openai_response(prompt)
 
+        match = re.search(r"```python\n(.*?)```", generated_command, re.S)
         if match:
             generated_command = match.group(1).strip()
 
-        logging.info(f"Generated command: {generated_command}")
         local_vars = {"df": df}
         exec(f"result = {generated_command}", {}, local_vars)
-
         result_df = local_vars.get("result")
+
         if not isinstance(result_df, pd.DataFrame):
             raise HTTPException(status_code=400, detail="Generated command did not produce a valid DataFrame.")
 
@@ -116,9 +123,14 @@ async def generate_chart(request: CommandRequest):
                   f"to create a graph based on the instruction below. The column names are: {column_names_str}.\n\n"
                   f"Instruction: {request.instruction}")
 
-        generated_response = get_claude_response(prompt) if request.model == "claude" else get_openai_response(prompt)
-        match = re.search(r"```(?:python)?\n(.*?)```", generated_response, re.S)
+        if request.model == "claude":
+            generated_response = get_claude_response(prompt)
+        elif request.model == "gemini":
+            generated_response = get_gemini_response(prompt)
+        else:
+            generated_response = get_openai_response(prompt)
 
+        match = re.search(r"```(?:python)?\n(.*?)```", generated_response, re.S)
         if match:
             graph_command = match.group(1).strip()
         else:
