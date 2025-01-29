@@ -13,17 +13,19 @@ import seaborn as sns
 import base64
 from typing import Optional
 from tempfile import NamedTemporaryFile
+import anthropic
 
 load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
+open_api_key = os.getenv("OPENAI_API_KEY")
+claude_api_key = os.getenv("CLAUDE_API_KEY")
 
-client = OpenAI(api_key=api_key)
+openaiClient = OpenAI(api_key=open_api_key)
+claudeClient = anthropic.Anthropic(api_key=claude_api_key)
 
 app = FastAPI()
 
 origins = [
     "http://localhost:3000",
-    "http://localhost:3000/dashboard"
     "http://localhost:5173",
     "http://localhost:3001",
     "https://ezydata.vercel.app"
@@ -42,79 +44,85 @@ logging.info(f"CORS origins allowed: {origins}")
 class CommandRequest(BaseModel):
     csv_data: str
     instruction: str
+    model: Optional[str] = "openai"
+
+def get_openai_response(prompt: str) -> str:
+    print('ENTROU OPENAI')
+    try:
+        response = openaiClient.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"OpenAI API error: {e}")
+        raise HTTPException(status_code=500, detail="OpenAI API request failed")
+
+def get_claude_response(prompt: str) -> str:
+    print('ENTROU CLAUDE')
+    try:
+        response = claudeClient.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.content[0].text.strip()
+    except Exception as e:
+        logging.error(f"Claude API error: {e}")
+        raise HTTPException(status_code=500, detail="Claude API request failed")
 
 @app.get('/')
 async def hello_world():
-    return "Hello, world!"
+    return {"message": "Hello, world!"}
 
 @app.post("/process-command/")
 async def process_command(request: CommandRequest):
     try:
         df = pd.read_csv(StringIO(request.csv_data))
+        column_names_str = ", ".join(df.columns.tolist())
 
-        column_names = df.columns.tolist()
-        column_names_str = ", ".join(column_names)
-        logging.info(f"Column names: {column_names_str}")
+        prompt = (f"You are an expert in pandas. Convert the following instruction into a pandas command. "
+                  f"The column names in the dataset are: {column_names_str}.\n\n"
+                  f"Instruction: {request.instruction}")
 
-        completion = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {
-                    "role": "system",
-                    "content": f"You are a helpful assistant that converts instructions into pandas commands. The column names in the dataset are: {column_names_str}."
-                },
-                {
-                    "role": "user",
-                    "content": f"Convert the following instruction into a pandas command. Give me only the code and nothing else.\n\nInstruction: {request.instruction}"
-                }
-            ],
-        )
-
-        generated_command = completion.choices[0].message.content.strip()
-        print('GENERATED COMMAND', generated_command)
+        generated_command = get_claude_response(prompt) if request.model == "claude" else get_openai_response(prompt)
         match = re.search(r"```python\n(.*?)```", generated_command, re.S)
 
-        logging.info(f"Generated command: {generated_command}")
+        if match:
+            generated_command = match.group(1).strip()
 
+        logging.info(f"Generated command: {generated_command}")
         local_vars = {"df": df}
         exec(f"result = {generated_command}", {}, local_vars)
 
         result_df = local_vars.get("result")
-        if result_df is None or not isinstance(result_df, pd.DataFrame):
+        if not isinstance(result_df, pd.DataFrame):
             raise HTTPException(status_code=400, detail="Generated command did not produce a valid DataFrame.")
 
         return {"type": "table", "data": result_df.to_json(orient="split")}
-
     except Exception as e:
         logging.error(f"Error processing command: {e}")
         raise HTTPException(status_code=400, detail=f"Failed to execute command: {str(e)}")
-
-
 
 @app.post("/generate-chart/")
 async def generate_chart(request: CommandRequest):
     try:
         df = pd.read_csv(StringIO(request.csv_data))
-        column_names = df.columns.tolist()
-        column_names_str = ", ".join(column_names)
+        column_names_str = ", ".join(df.columns.tolist())
 
-        system_message = f"You are a helpful assistant that generates Python graph commands using matplotlib or seaborn. The column names are: {column_names_str}."
+        prompt = (f"You are an expert in Python data visualization. Generate a valid matplotlib/seaborn command "
+                  f"to create a graph based on the instruction below. The column names are: {column_names_str}.\n\n"
+                  f"Instruction: {request.instruction}")
 
-        completion = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": f"Generate Python graph code using matplotlib/seaborn. Only provide the code block.\nInstruction: {request.instruction}"}
-            ],
-        )
+        generated_response = get_claude_response(prompt) if request.model == "claude" else get_openai_response(prompt)
+        match = re.search(r"```(?:python)?\n(.*?)```", generated_response, re.S)
 
-        generated_response = completion.choices[0].message.content.strip()
-        
-        code_block = re.search(r"```(?:python)?\n(.*?)```", generated_response, re.DOTALL)
-        if not code_block:
+        if match:
+            graph_command = match.group(1).strip()
+        else:
             raise HTTPException(status_code=400, detail="No valid code block found in response")
-            
-        graph_command = code_block.group(1).strip()
 
         if not any(x in graph_command for x in ['plt.show()', 'plt.savefig', 'sns.']):
             raise HTTPException(status_code=400, detail="Generated code doesn't contain valid plotting commands")
@@ -129,7 +137,6 @@ async def generate_chart(request: CommandRequest):
             graph_data = base64.b64encode(tmp_file.read()).decode("utf-8")
 
         return {"type": "graph", "graph": graph_data}
-
     except Exception as e:
         logging.error(f"Chart error: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Chart generation failed: {str(e)}")
